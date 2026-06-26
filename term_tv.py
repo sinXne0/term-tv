@@ -714,12 +714,14 @@ class Player:
         quality: str,
         renderer: str,
         audio_source: str | None = None,
+        adaptive: bool = True,
     ) -> None:
         self.source = source
         self.audio_source = audio_source or source
         self.info = info
         self.no_audio = no_audio
         self.quality = quality
+        self.adaptive = adaptive
         self.renderer = "kitty" if renderer == "auto" and kitty_available() else renderer
         if self.renderer == "auto":
             self.renderer = "text"
@@ -738,6 +740,7 @@ class Player:
         self.height = 0
         self.kitty_initialized = False
         self.kitty_active_image = 1
+        self.slow_frame_streak = 0
 
     def dimensions(self) -> tuple[int, int]:
         terminal = shutil.get_terminal_size((80, 24))
@@ -805,6 +808,7 @@ class Player:
         self.kitty_active_image = 1
         self.position = max(0.0, min(position, self.info.duration or position))
         self.frame_index = 0
+        self.slow_frame_streak = 0
         self.width, self.height = self.dimensions()
 
         ffmpeg = require_program("ffmpeg")
@@ -901,7 +905,7 @@ class Player:
     def drop_late_frames(self, frame: bytes) -> bytes:
         """Discard decoded frames when rendering falls behind real time."""
         expected = int((time.monotonic() - self.started_at) * self.frame_rate)
-        to_drop = min(max(0, expected - self.frame_index - 1), 8)
+        to_drop = min(max(0, expected - self.frame_index - 1), int(self.frame_rate))
         for _ in range(to_drop):
             newer = self.read_frame()
             if newer is None:
@@ -909,6 +913,37 @@ class Player:
             frame = newer
             self.frame_index += 1
         return frame
+
+    def lag_seconds(self) -> float:
+        expected = (time.monotonic() - self.started_at) * self.frame_rate
+        return max(0.0, (expected - self.frame_index - 1) / self.frame_rate)
+
+    def resync_if_far_behind(self) -> bool:
+        """Restart decoding when the renderer is too far behind real time."""
+        if self.lag_seconds() < 1.0:
+            return False
+        position = self.current_position() if self.info.duration > 0 else 0
+        self.start(position)
+        return True
+
+    def adapt_after_frame(self, elapsed: float) -> bool:
+        """Lower quality if rendering cannot sustain the selected preset."""
+        if not self.adaptive or self.quality == "fast":
+            return False
+        frame_budget = 1 / self.frame_rate
+        if elapsed < frame_budget * 0.9:
+            self.slow_frame_streak = 0
+            return False
+        self.slow_frame_streak += 1
+        if self.slow_frame_streak < 12:
+            return False
+
+        index = QUALITY_ORDER.index(self.quality)
+        self.quality = QUALITY_ORDER[index - 1]
+        self.frame_rate = min(self.info.fps, QUALITY_PROFILES[self.quality].fps)
+        position = self.current_position() if self.info.duration > 0 else 0
+        self.start(position)
+        return True
 
     def status(self) -> bytes:
         current = self.current_position()
@@ -921,7 +956,8 @@ class Player:
         audio = "audio" if self.audio else "silent"
         text = (
             f"{state}  {timing}  [{audio} · {self.renderer} · "
-            f"{self.quality} {self.frame_rate:g}fps]"
+            f"{self.quality} {self.frame_rate:g}fps"
+            f"{' · adaptive' if self.adaptive else ''}]"
             f"  space pause · m quality · ←/→ seek · q quit"
         )
         columns = shutil.get_terminal_size((80, 24)).columns
@@ -949,6 +985,9 @@ class Player:
                         time.sleep(0.02)
                         continue
 
+                    if self.resync_if_far_behind():
+                        continue
+
                     new_dimensions = self.dimensions()
                     if new_dimensions != (self.width, self.height):
                         position = self.current_position() if self.info.duration > 0 else 0
@@ -959,6 +998,7 @@ class Player:
                         break
                     frame = self.drop_late_frames(frame)
                     self.wait_for_frame()
+                    render_started = time.monotonic()
                     terminal_size = shutil.get_terminal_size((80, 24))
                     if self.renderer == "kitty":
                         sys.stdout.buffer.write((CSI + "H").encode())
@@ -1004,6 +1044,7 @@ class Player:
                         sys.stdout.buffer.write(self.status())
                     sys.stdout.buffer.flush()
                     self.frame_index += 1
+                    self.adapt_after_frame(time.monotonic() - render_started)
         finally:
             self.stop_processes()
             if self.renderer == "kitty" and sys.stdout.isatty():
@@ -1052,6 +1093,11 @@ def parse_args() -> argparse.Namespace:
         default="auto",
         help="image renderer; auto uses Kitty graphics when available",
     )
+    parser.add_argument(
+        "--no-adaptive",
+        action="store_true",
+        help="keep the selected quality even if rendering falls behind",
+    )
     return parser.parse_args()
 
 
@@ -1099,6 +1145,7 @@ def main() -> int:
             args.quality,
             args.renderer,
             audio_source=resolved.audio,
+            adaptive=not args.no_adaptive,
         ).run()
     except (
         RuntimeError,

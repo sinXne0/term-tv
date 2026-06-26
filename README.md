@@ -201,6 +201,14 @@ Use maximum quality:
 term-tv --quality high ~/Videos/movie.mp4
 ```
 
+By default, `term-tv` adapts if the terminal cannot keep up. It drops stale
+frames, resyncs when playback gets too far behind, and may step down one
+quality preset after sustained slow rendering. To force the selected preset:
+
+```bash
+term-tv --quality high --no-adaptive ~/Videos/movie.mp4
+```
+
 Open the built-in Internet TV guide:
 
 ```bash
@@ -285,6 +293,8 @@ Seeking is disabled for live streams that do not report a duration.
 The high preset uses Lanczos scaling, full-chroma interpolation, sharpening,
 and RGB-aware quadrant reconstruction in text mode.
 
+Adaptive playback is enabled unless `--no-adaptive` is provided.
+
 ## Troubleshooting
 
 ### Audio plays but the picture is frozen
@@ -304,6 +314,23 @@ printf '%s\n' "$TERM"
 ```
 
 Kitty normally reports `xterm-kitty`.
+
+### The video lags behind the audio
+
+Try the fast preset first:
+
+```bash
+term-tv --quality fast ~/Videos/movie.mp4
+```
+
+For the sharpest playback with less text-rendering overhead, run inside Kitty:
+
+```bash
+term-tv --renderer kitty --quality balanced ~/Videos/movie.mp4
+```
+
+If you are testing maximum quality, leave adaptive playback enabled. Use
+`--no-adaptive` only when you want to benchmark or force a preset.
 
 ### The image is blurry
 

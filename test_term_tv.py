@@ -235,6 +235,61 @@ station.mp4
             else:
                 os.environ["KITTY_WINDOW_ID"] = old_kitty_window
 
+    def test_player_drops_up_to_one_second_of_late_frames(self):
+        player = tvp.Player(
+            "video.mp4",
+            tvp.VideoInfo(width=1920, height=1080, fps=30, duration=60),
+            no_audio=True,
+            quality="balanced",
+            renderer="text",
+        )
+        player.frame_rate = 15
+        player.started_at = 0
+        player.frame_index = 0
+        frames = [bytes([index]) for index in range(20)]
+
+        def read_frame():
+            return frames.pop(0)
+
+        with mock.patch.object(tvp.time, "monotonic", return_value=2.0):
+            with mock.patch.object(player, "read_frame", side_effect=read_frame):
+                frame = player.drop_late_frames(b"old")
+
+        self.assertEqual(frame, bytes([14]))
+        self.assertEqual(player.frame_index, 15)
+
+    def test_adaptive_quality_steps_down_after_slow_frames(self):
+        player = tvp.Player(
+            "video.mp4",
+            tvp.VideoInfo(width=1920, height=1080, fps=30, duration=60),
+            no_audio=True,
+            quality="high",
+            renderer="text",
+        )
+        player.started_at = 0
+        with mock.patch.object(player, "start") as start:
+            for _ in range(12):
+                changed = player.adapt_after_frame(1.0)
+
+        self.assertTrue(changed)
+        self.assertEqual(player.quality, "balanced")
+        start.assert_called_once()
+
+    def test_no_adaptive_keeps_requested_quality(self):
+        player = tvp.Player(
+            "video.mp4",
+            tvp.VideoInfo(width=1920, height=1080, fps=30, duration=60),
+            no_audio=True,
+            quality="high",
+            renderer="text",
+            adaptive=False,
+        )
+        for _ in range(20):
+            changed = player.adapt_after_frame(1.0)
+
+        self.assertFalse(changed)
+        self.assertEqual(player.quality, "high")
+
 
 if __name__ == "__main__":
     unittest.main()
