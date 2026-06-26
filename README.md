@@ -21,6 +21,7 @@ blocks or native Kitty graphics.
 - Supports pause, seek, terminal resize, and live quality switching
 - Offers portable true-color text rendering
 - Uses native pixel graphics automatically inside Kitty
+- Includes `term-web`, a terminal-only text web browser
 - Has no Python package dependencies
 
 ## Requirements
@@ -96,6 +97,7 @@ The installer:
 
 - creates `~/.local/bin` when needed;
 - installs the `term-tv` command as a symbolic link;
+- installs the `term-web` terminal browser command;
 - installs `tvp` as a compatibility alias;
 - optionally installs the official `yt-dlp` and Deno standalone binaries;
 - adds `~/.local/bin` to `~/.bashrc` if it is not already on `PATH`.
@@ -120,6 +122,12 @@ For example, Zsh users can add it to `~/.zshrc`.
 term-tv --help
 ```
 
+You can also start the terminal browser:
+
+```bash
+term-web
+```
+
 ### 5. Play your first video
 
 ```bash
@@ -137,6 +145,42 @@ Run the command without a path to choose a local video or open Internet TV:
 ```bash
 term-tv
 ```
+
+## Terminal web browser
+
+`term-web` is a simple browser that renders websites as readable terminal text.
+It ignores JavaScript, CSS, images, video, and tracking-heavy page behavior.
+That keeps it portable and fast, but it means complex web apps will not behave
+like they do in Firefox or Chrome.
+
+Start on the built-in home page:
+
+```bash
+term-web
+```
+
+Open a URL:
+
+```bash
+term-web https://example.com
+```
+
+Search from the terminal:
+
+```bash
+term-web "open source terminal browser"
+```
+
+While browsing:
+
+| Input | Action |
+| --- | --- |
+| URL or words | Open a URL or search DuckDuckGo HTML |
+| Link number | Follow that numbered link |
+| `b` | Back |
+| `r` | Reload |
+| `h` | Home |
+| `q` | Quit |
 
 ## Getting the best image quality
 

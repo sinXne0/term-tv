@@ -5,6 +5,7 @@ project_dir="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
 bin_dir="${HOME}/.local/bin"
 launcher="${bin_dir}/term-tv"
 legacy_launcher="${bin_dir}/tvp"
+browser_launcher="${bin_dir}/term-web"
 install_youtube=false
 
 for argument in "$@"; do
@@ -24,7 +25,9 @@ done
 mkdir -p "$bin_dir"
 ln -sfn "${project_dir}/term_tv.py" "$launcher"
 ln -sfn "${project_dir}/term_tv.py" "$legacy_launcher"
+ln -sfn "${project_dir}/term_web.py" "$browser_launcher"
 chmod +x "${project_dir}/term_tv.py"
+chmod +x "${project_dir}/term_web.py"
 
 if "$install_youtube"; then
   yt_dlp="${bin_dir}/yt-dlp"
@@ -80,5 +83,6 @@ case ":${PATH}:" in
 esac
 
 printf 'Installed term-tv at %s\n' "$launcher"
+printf 'Installed term-web at %s\n' "$browser_launcher"
 printf 'Installed compatibility alias at %s\n' "$legacy_launcher"
 printf 'Open a new terminal, then run: term-tv\n'
