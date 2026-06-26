@@ -177,10 +177,29 @@ While browsing:
 | --- | --- |
 | URL or words | Open a URL or search DuckDuckGo HTML |
 | Link number | Follow that numbered link |
+| `j` / `k` | Scroll down or up one line |
+| `d` / `u` | Page down or page up |
+| `g` / `G` | Jump to top or bottom |
+| `/text` | Search inside the current page |
+| `n` / `N` | Move to next or previous search match |
+| `mark` | Bookmark the current page |
+| `marks` | Open bookmarks |
+| `forms` | Check whether the current page has forms |
+| `submit 1` | Submit a simple GET form by number |
 | `b` | Back |
 | `r` | Reload |
 | `h` | Home |
 | `q` | Quit |
+
+Bookmarks are saved in:
+
+```bash
+~/.local/share/term-web/bookmarks.json
+```
+
+Form support is intentionally basic. `term-web` supports classic GET forms,
+such as many search boxes. JavaScript-heavy login and checkout flows are out of
+scope for this terminal-first browser.
 
 ## Getting the best image quality
 
