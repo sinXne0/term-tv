@@ -183,22 +183,23 @@ While browsing:
 
 | Input | Action |
 | --- | --- |
-| URL or words | Open a URL or search Mojeek |
+| `o` | Open a URL or search Mojeek |
+| `l` | Open a link-number prompt |
+| `s` | Submit a simple GET form by number |
 | `!ddg words` | Search DuckDuckGo HTML |
 | `!brave words` | Search Brave |
-| Link number | Follow that numbered link |
-| `j` / `k` | Scroll down or up one line |
-| `d` / `u` | Page down or page up |
-| `g` / `G` | Jump to top or bottom |
-| `/text` | Search inside the current page |
+| `j` / `k` or arrow keys | Scroll down or up one line |
+| `d` / `u` or PageDown/PageUp | Page down or page up |
+| `g` / `G` or Home/End | Jump to top or bottom |
+| `/` | Search inside the current page |
 | `n` / `N` | Move to next or previous search match |
-| `mark` | Bookmark the current page |
-| `marks` | Open bookmarks |
-| `forms` | Check whether the current page has forms |
-| `submit 1` | Submit a simple GET form by number |
+| `m` | Bookmark the current page |
+| `M` | Open bookmarks |
 | `b` | Back |
 | `r` | Reload |
 | `h` | Home |
+| `?` | Help |
+| `:` | Command prompt for commands like `open example.com`, `link 3`, or `submit 1` |
 | `q` | Quit |
 
 Bookmarks are saved in:

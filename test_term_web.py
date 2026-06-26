@@ -152,6 +152,56 @@ class BrowserTests(unittest.TestCase):
             self.assertEqual(bookmark_page.title, "Bookmarks")
             self.assertEqual(bookmark_page.links[0].url, "https://example.com")
 
+    def test_link_target_finds_numbered_links(self):
+        page = web.Page(
+            "about:test",
+            "Test",
+            [],
+            [web.Link(1, "Example", "https://example.com")],
+        )
+        target, error = web.link_target(page, "1")
+        self.assertEqual(target, "https://example.com")
+        self.assertIsNone(error)
+
+        target, error = web.link_target(page, "2")
+        self.assertIsNone(target)
+        self.assertEqual(error, "No link numbered 2.")
+
+    def test_command_target_supports_open_search_and_link(self):
+        page = web.Page(
+            "about:test",
+            "Test",
+            [],
+            [web.Link(1, "Example", "https://example.com")],
+        )
+        state = web.BrowserState(page=page, history=[])
+
+        self.assertEqual(web.command_target(state, "open python.org"), ("python.org", None))
+        self.assertEqual(
+            web.command_target(state, "search terminal browser"),
+            ("terminal browser", None),
+        )
+        self.assertEqual(
+            web.command_target(state, "link 1"),
+            ("https://example.com", None),
+        )
+
+    def test_handle_prompt_command_scrolls_without_loading_page(self):
+        page = web.Page("about:test", "Test", [str(index) for index in range(20)], [])
+        state = web.BrowserState(page=page, history=[])
+        with mock.patch.object(web, "viewport_height", return_value=5):
+            should_quit, message = web.handle_prompt_command(state, "d")
+
+        self.assertFalse(should_quit)
+        self.assertIsNone(message)
+        self.assertEqual(state.scroll, 5)
+
+    def test_help_page_documents_fast_keys(self):
+        page = web.help_page()
+        text = "\n".join(page.lines)
+        self.assertIn("Fast keys do not require Enter", text)
+        self.assertIn("o              open URL or search", text)
+
 
 if __name__ == "__main__":
     unittest.main()

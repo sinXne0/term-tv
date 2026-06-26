@@ -6,10 +6,14 @@ from __future__ import annotations
 import argparse
 import html
 import json
+import os
 import re
+import select
 import shutil
 import sys
+import termios
 import textwrap
+import tty
 import urllib.error
 import urllib.parse
 import urllib.request
@@ -25,6 +29,7 @@ RESET = CSI + "0m"
 BOLD = CSI + "1m"
 DIM = CSI + "2m"
 UNDERLINE = CSI + "4m"
+SHOW_CURSOR = CSI + "?25h"
 
 
 USER_AGENT = "term-web/0.1 (+https://github.com/sinXne0/term-tv)"
@@ -76,6 +81,66 @@ class BrowserState:
     scroll: int = 0
     search: str = ""
     match_index: int = -1
+
+
+class BrowserTerminal:
+    def __init__(self) -> None:
+        self.fd = sys.stdin.fileno()
+        self.original: list[int] | None = None
+
+    def __enter__(self) -> "BrowserTerminal":
+        if sys.stdin.isatty() and sys.stdout.isatty():
+            self.original = termios.tcgetattr(self.fd)
+            tty.setcbreak(self.fd)
+        return self
+
+    def __exit__(self, *_: object) -> None:
+        self.restore()
+        print(SHOW_CURSOR + RESET, end="")
+
+    def restore(self) -> None:
+        if self.original is not None:
+            termios.tcsetattr(self.fd, termios.TCSADRAIN, self.original)
+
+    def cbreak(self) -> None:
+        if self.original is not None:
+            tty.setcbreak(self.fd)
+
+    def read_key(self) -> str:
+        data = os.read(self.fd, 1).decode(errors="ignore")
+        if data != "\x1b":
+            return data
+        sequence = data
+        while select.select([self.fd], [], [], 0.01)[0]:
+            sequence += os.read(self.fd, 1).decode(errors="ignore")
+            if sequence.endswith("~") or len(sequence) >= 6:
+                break
+        return {
+            "\x1b[A": "up",
+            "\x1b[B": "down",
+            "\x1b[C": "right",
+            "\x1b[D": "left",
+            "\x1b[5~": "pageup",
+            "\x1b[6~": "pagedown",
+            "\x1b[H": "home",
+            "\x1b[F": "end",
+            "\x1bOH": "home",
+            "\x1bOF": "end",
+        }.get(sequence, "escape")
+
+    def prompt(self, label: str) -> str:
+        self.restore()
+        try:
+            return input(label).strip()
+        finally:
+            self.cbreak()
+
+    def pause(self, message: str = "Press Enter to continue.") -> None:
+        self.restore()
+        try:
+            input(message)
+        finally:
+            self.cbreak()
 
 
 def terminal_width() -> int:
@@ -144,6 +209,46 @@ def bookmarks_page(path: Path | None = None) -> Page:
         title="Bookmarks",
         lines=lines,
         links=bookmarks,
+    )
+
+
+def help_page() -> Page:
+    return Page(
+        url="about:help",
+        title="term-web help",
+        lines=[
+            "term-web navigation",
+            "",
+            "Fast keys do not require Enter:",
+            "  j / Down       scroll down",
+            "  k / Up         scroll up",
+            "  d / PageDown   page down",
+            "  u / PageUp     page up",
+            "  g / Home       top",
+            "  G / End        bottom",
+            "  o              open URL or search",
+            "  l              open link by number",
+            "  /              search within page",
+            "  n / N          next or previous search match",
+            "  s              submit a simple GET form",
+            "  m              bookmark current page",
+            "  M              open bookmarks",
+            "  b              back",
+            "  r              reload",
+            "  h              home",
+            "  ?              this help",
+            "  :              command prompt",
+            "  q              quit",
+            "",
+            "Command prompt examples:",
+            "  open example.com",
+            "  search terminal browser",
+            "  link 3",
+            "  submit 1",
+            "  mark",
+            "  marks",
+        ],
+        links=[],
     )
 
 
@@ -440,6 +545,8 @@ def load_page(address: str) -> Page:
         return about_home()
     if url == "about:bookmarks":
         return bookmarks_page()
+    if url == "about:help":
+        return help_page()
     final_url, content_type, body = fetch(url)
     return parse_page(final_url, content_type, body)
 
@@ -465,7 +572,7 @@ def form_target(form: Form, values: dict[str, str]) -> str:
     return form.action
 
 
-def prompt_form(form: Form) -> str:
+def prompt_form(form: Form, ask=input) -> str:
     if form.method != "get":
         raise RuntimeError("Only GET forms are supported in this version.")
     values = {}
@@ -475,7 +582,7 @@ def prompt_form(form: Form) -> str:
             continue
         prompt = field.label or field.name
         suffix = f" [{field.value}]" if field.value else ""
-        answer = input(f"{prompt}{suffix}: ").strip()
+        answer = ask(f"{prompt}{suffix}: ").strip()
         values[field.name] = answer if answer else field.value
     return form_target(form, values)
 
@@ -502,6 +609,57 @@ def find_on_page(state: BrowserState, query: str, direction: int = 1) -> bool:
     return True
 
 
+def go_back(state: BrowserState) -> None:
+    if state.history:
+        state.page = state.history.pop()
+        state.scroll = 0
+        state.search = ""
+        state.match_index = -1
+
+
+def open_target(state: BrowserState, target: str) -> str | None:
+    try:
+        next_page = load_page(target)
+    except (OSError, urllib.error.URLError, UnicodeError) as error:
+        return str(error)
+    set_page(state, next_page)
+    return None
+
+
+def link_target(page: Page, value: str) -> tuple[str | None, str | None]:
+    if not value.isdigit():
+        return None, "Enter a link number."
+    index = int(value)
+    link = next((link for link in page.links if link.index == index), None)
+    if link is None:
+        return None, f"No link numbered {index}."
+    return link.url, None
+
+
+def form_by_number(page: Page, value: str) -> tuple[Form | None, str | None]:
+    if not value.isdigit():
+        return None, "Enter a form number."
+    form = next((form for form in page.forms if form.index == int(value)), None)
+    if form is None:
+        return None, f"No form numbered {value}."
+    return form, None
+
+
+def command_target(state: BrowserState, command: str) -> tuple[str | None, str | None]:
+    lowered = command.lower().strip()
+    if lowered.startswith("open "):
+        return command[5:].strip(), None
+    if lowered.startswith("search "):
+        return command[7:].strip(), None
+    if lowered.startswith("link "):
+        return link_target(state.page, lowered.removeprefix("link ").strip())
+    if command.isdigit():
+        return link_target(state.page, command)
+    if lowered in {"reload", "r"}:
+        return state.page.url, None
+    return command, None
+
+
 def print_page(state: BrowserState, error: str | None = None) -> None:
     page = state.page
     width = terminal_width()
@@ -518,8 +676,7 @@ def print_page(state: BrowserState, error: str | None = None) -> None:
     if error:
         print(f"error: {error}\n")
     visible_lines = page.lines[state.scroll : state.scroll + height]
-    for offset, line in enumerate(visible_lines):
-        line_number = state.scroll + offset
+    for line in visible_lines:
         if state.search and state.search.casefold() in line.casefold():
             print((BOLD + line[:width] + RESET))
         else:
@@ -538,13 +695,94 @@ def print_page(state: BrowserState, error: str | None = None) -> None:
             print(f"  {form.index:>2}. {form.method.upper()} {fields[: width - 12]}")
     print()
     print(
-        f"{DIM}URL/search/link · j/k scroll · d/u page · /find · n/N · "
-        f"submit N · mark/marks · b back · r reload · h home · q quit{RESET}"
+        f"{DIM}j/k/↑/↓ scroll · d/u/Pg page · o open · l links · / find · "
+        f"s submit · m mark · ? help · q quit{RESET}"
     )
 
 
-def browse(start: str = "about:home") -> int:
-    state = BrowserState(page=load_page(start), history=[])
+def handle_prompt_command(
+    state: BrowserState,
+    command: str,
+    ask=input,
+) -> tuple[bool, str | None]:
+    if not command:
+        return False, None
+    lowered = command.lower()
+    if lowered == "q":
+        return True, None
+    if lowered in {"j", "down"}:
+        state.scroll = clamp_scroll(state.page, state.scroll + 1)
+        return False, None
+    if lowered in {"k", "up"}:
+        state.scroll = clamp_scroll(state.page, state.scroll - 1)
+        return False, None
+    if lowered in {"d", "pagedown"}:
+        state.scroll = clamp_scroll(state.page, state.scroll + viewport_height())
+        return False, None
+    if lowered in {"u", "pageup"}:
+        state.scroll = clamp_scroll(state.page, state.scroll - viewport_height())
+        return False, None
+    if lowered == "g":
+        state.scroll = 0
+        return False, None
+    if command == "G":
+        state.scroll = clamp_scroll(state.page, len(state.page.lines))
+        return False, None
+    if command.startswith("/") and len(command) > 1:
+        if not find_on_page(state, command[1:]):
+            return False, f"No matches for {command[1:]!r}."
+        return False, None
+    if command == "n" and state.search:
+        find_on_page(state, state.search, 1)
+        return False, None
+    if command == "N" and state.search:
+        find_on_page(state, state.search, -1)
+        return False, None
+    if lowered in {"mark", "m"}:
+        return (
+            False,
+            "Bookmark saved."
+            if add_bookmark(state.page)
+            else "Bookmark already exists or cannot be saved.",
+        )
+    if lowered in {"marks", "bookmarks"}:
+        set_page(state, bookmarks_page())
+        return False, None
+    if lowered in {"?", "help"}:
+        set_page(state, help_page())
+        return False, None
+    if lowered == "forms":
+        return (
+            False,
+            f"{len(state.page.forms)} form(s) on this page."
+            if state.page.forms
+            else "No forms on this page.",
+        )
+    if lowered.startswith("submit "):
+        form, error = form_by_number(state.page, lowered.removeprefix("submit ").strip())
+        if error:
+            return False, error
+        assert form is not None
+        try:
+            target = prompt_form(form, ask)
+        except RuntimeError as error:
+            return False, str(error)
+        return False, open_target(state, target)
+    if lowered == "h":
+        set_page(state, about_home())
+        return False, None
+    if lowered == "b":
+        go_back(state)
+        return False, None
+
+    target, error = command_target(state, command)
+    if error:
+        return False, error
+    assert target is not None
+    return False, open_target(state, target)
+
+
+def browse_prompt(state: BrowserState) -> int:
     while True:
         print_page(state)
         try:
@@ -552,111 +790,112 @@ def browse(start: str = "about:home") -> int:
         except (EOFError, KeyboardInterrupt):
             print()
             return 130
-        if not command:
-            continue
-        lowered = command.lower()
-        if lowered == "q":
+        should_quit, message = handle_prompt_command(state, command)
+        if should_quit:
             return 0
-        if lowered in {"j", "down"}:
-            state.scroll = clamp_scroll(state.page, state.scroll + 1)
-            continue
-        if lowered in {"k", "up"}:
-            state.scroll = clamp_scroll(state.page, state.scroll - 1)
-            continue
-        if lowered in {"d", "pagedown"}:
-            state.scroll = clamp_scroll(state.page, state.scroll + viewport_height())
-            continue
-        if lowered in {"u", "pageup"}:
-            state.scroll = clamp_scroll(state.page, state.scroll - viewport_height())
-            continue
-        if lowered == "g":
-            state.scroll = 0
-            continue
-        if command == "G":
-            state.scroll = clamp_scroll(state.page, len(state.page.lines))
-            continue
-        if command.startswith("/") and len(command) > 1:
-            if not find_on_page(state, command[1:]):
-                print_page(state, f"No matches for {command[1:]!r}.")
-                input("Press Enter to continue.")
-            continue
-        if command == "n" and state.search:
-            find_on_page(state, state.search, 1)
-            continue
-        if command == "N" and state.search:
-            find_on_page(state, state.search, -1)
-            continue
-        if lowered == "mark":
-            message = "Bookmark saved." if add_bookmark(state.page) else "Bookmark already exists or cannot be saved."
+        if message:
             print_page(state, message)
             input("Press Enter to continue.")
-            continue
-        if lowered == "marks":
-            set_page(state, bookmarks_page())
-            continue
-        if lowered == "forms":
-            if not state.page.forms:
-                print_page(state, "No forms on this page.")
-                input("Press Enter to continue.")
-            continue
-        if lowered.startswith("submit "):
-            form_number = lowered.removeprefix("submit ").strip()
-            if not form_number.isdigit():
-                print_page(state, "Use: submit FORM_NUMBER")
-                input("Press Enter to continue.")
-                continue
-            form = next(
-                (form for form in state.page.forms if form.index == int(form_number)),
-                None,
-            )
-            if form is None:
-                print_page(state, f"No form numbered {form_number}.")
-                input("Press Enter to continue.")
-                continue
-            try:
-                target = prompt_form(form)
-            except RuntimeError as error:
-                print_page(state, str(error))
-                input("Press Enter to continue.")
-                continue
-            try:
-                next_page = load_page(target)
-            except (OSError, urllib.error.URLError, UnicodeError) as error:
-                print_page(state, str(error))
-                input("Press Enter to continue.")
-                continue
-            set_page(state, next_page)
-            continue
-        if lowered == "h":
-            set_page(state, about_home())
-            continue
-        if lowered == "b":
-            if state.history:
-                state.page = state.history.pop()
-                state.scroll = 0
-                state.search = ""
-                state.match_index = -1
-            continue
-        if lowered == "r":
-            target = state.page.url
-        elif command.isdigit():
-            index = int(command)
-            link = next((link for link in state.page.links if link.index == index), None)
-            if link is None:
-                print_page(state, f"No link numbered {index}.")
-                input("Press Enter to continue.")
-                continue
-            target = link.url
-        else:
-            target = command
 
-        try:
-            next_page = load_page(target)
-        except (OSError, urllib.error.URLError, UnicodeError) as error:
-            print_page(state, str(error))
-            input("Press Enter to continue.")
-            continue
-        set_page(state, next_page)
+
+def browse(start: str = "about:home") -> int:
+    state = BrowserState(page=load_page(start), history=[])
+    if not sys.stdin.isatty() or not sys.stdout.isatty():
+        return browse_prompt(state)
+
+    with BrowserTerminal() as terminal:
+        while True:
+            print_page(state)
+            key = terminal.read_key()
+            if key in {"q", "\x03"}:
+                return 0 if key == "q" else 130
+            if key in {"j", "down"}:
+                state.scroll = clamp_scroll(state.page, state.scroll + 1)
+            elif key in {"k", "up"}:
+                state.scroll = clamp_scroll(state.page, state.scroll - 1)
+            elif key in {"d", "pagedown", " "}:
+                state.scroll = clamp_scroll(state.page, state.scroll + viewport_height())
+            elif key in {"u", "pageup"}:
+                state.scroll = clamp_scroll(state.page, state.scroll - viewport_height())
+            elif key in {"g", "home"}:
+                state.scroll = 0
+            elif key in {"G", "end"}:
+                state.scroll = clamp_scroll(state.page, len(state.page.lines))
+            elif key == "b":
+                go_back(state)
+            elif key == "h":
+                set_page(state, about_home())
+            elif key == "?":
+                set_page(state, help_page())
+            elif key == "r":
+                message = open_target(state, state.page.url)
+                if message:
+                    print_page(state, message)
+                    terminal.pause()
+            elif key == "m":
+                message = (
+                    "Bookmark saved."
+                    if add_bookmark(state.page)
+                    else "Bookmark already exists or cannot be saved."
+                )
+                print_page(state, message)
+                terminal.pause()
+            elif key == "M":
+                set_page(state, bookmarks_page())
+            elif key == "n" and state.search:
+                find_on_page(state, state.search, 1)
+            elif key == "N" and state.search:
+                find_on_page(state, state.search, -1)
+            elif key == "/":
+                query = terminal.prompt("Find: ")
+                if query and not find_on_page(state, query):
+                    print_page(state, f"No matches for {query!r}.")
+                    terminal.pause()
+            elif key == "o":
+                target = terminal.prompt("Open URL/search: ")
+                if target:
+                    message = open_target(state, target)
+                    if message:
+                        print_page(state, message)
+                        terminal.pause()
+            elif key == "l":
+                value = terminal.prompt("Link number: ")
+                target, message = link_target(state.page, value)
+                if message:
+                    print_page(state, message)
+                    terminal.pause()
+                elif target:
+                    message = open_target(state, target)
+                    if message:
+                        print_page(state, message)
+                        terminal.pause()
+            elif key == "s":
+                value = terminal.prompt("Form number: ")
+                form, message = form_by_number(state.page, value)
+                if message:
+                    print_page(state, message)
+                    terminal.pause()
+                elif form:
+                    try:
+                        target = prompt_form(form, terminal.prompt)
+                    except RuntimeError as error:
+                        print_page(state, str(error))
+                        terminal.pause()
+                        continue
+                    message = open_target(state, target)
+                    if message:
+                        print_page(state, message)
+                        terminal.pause()
+            elif key == ":":
+                command = terminal.prompt(":")
+                should_quit, message = handle_prompt_command(
+                    state, command, terminal.prompt
+                )
+                if should_quit:
+                    return 0
+                if message:
+                    print_page(state, message)
+                    terminal.pause()
 
 
 def parse_args() -> argparse.Namespace:
