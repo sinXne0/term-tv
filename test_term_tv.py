@@ -310,6 +310,42 @@ station.mp4
         self.assertFalse(changed)
         self.assertEqual(player.quality, "high")
 
+    def test_status_shows_back_and_home_controls(self):
+        player = tvp.Player(
+            "video.mp4",
+            tvp.VideoInfo(width=1920, height=1080, fps=30, duration=60),
+            no_audio=True,
+            quality="balanced",
+            renderer="text",
+        )
+        status = player.status().decode()
+        self.assertIn("b back", status)
+        self.assertIn("h home", status)
+
+    def test_explicit_start_mode_prefers_navigation_flags(self):
+        args = mock.Mock(tv=True, playlist=None, youtube=None, video=None)
+        self.assertEqual(tvp.explicit_start_mode(args), "tv")
+
+        args = mock.Mock(tv=False, playlist="channels.m3u", youtube=None, video=None)
+        self.assertEqual(tvp.explicit_start_mode(args), "playlist")
+
+        args = mock.Mock(tv=False, playlist=None, youtube="NASA live", video=None)
+        self.assertEqual(tvp.explicit_start_mode(args), "youtube")
+
+        args = mock.Mock(
+            tv=False,
+            playlist=None,
+            youtube=None,
+            video="https://youtu.be/example",
+        )
+        self.assertEqual(tvp.explicit_start_mode(args), "youtube")
+
+        args = mock.Mock(tv=False, playlist=None, youtube=None, video="movie.mp4")
+        self.assertEqual(tvp.explicit_start_mode(args), "direct")
+
+        args = mock.Mock(tv=False, playlist=None, youtube=None, video=None)
+        self.assertIsNone(tvp.explicit_start_mode(args))
+
 
 if __name__ == "__main__":
     unittest.main()

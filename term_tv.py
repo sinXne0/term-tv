@@ -951,25 +951,32 @@ class Player:
             timing = f"{format_time(current)} / {format_time(self.info.duration)}"
         else:
             timing = f"LIVE · {format_time(current)}"
-        state = "PAUSED" if self.paused_at is not None else "PLAYING"
+        state = "PAUSE" if self.paused_at is not None else "PLAY"
         audio = "audio" if self.audio else "silent"
         text = (
-            f"{state}  {timing}  [{audio} · {self.renderer} · "
-            f"{self.quality} {self.frame_rate:g}fps"
-            f"{' · adaptive' if self.adaptive else ''}]"
-            f"  space pause · m quality · ←/→ seek · q quit"
+            f"{state} {timing} [{audio} {self.renderer} {self.quality} "
+            f"{self.frame_rate:g}fps{' adaptive' if self.adaptive else ''}] "
+            f"b back h home q quit space pause m quality ←/→ seek"
         )
         columns = shutil.get_terminal_size((80, 24)).columns
         width = max(1, columns - 1)
         return (RESET + ERASE_LINE + text[:width].ljust(width)).encode()
 
-    def run(self) -> None:
+    def run(self) -> str:
+        action = "ended"
         self.start(0)
         try:
             with Terminal() as terminal:
                 while True:
                     key = terminal.key()
                     if key in ("q", "\x03"):
+                        action = "quit"
+                        break
+                    if key == "b":
+                        action = "back"
+                        break
+                    if key == "h":
+                        action = "home"
                         break
                     if key == " ":
                         self.pause()
@@ -1049,6 +1056,7 @@ class Player:
                 sys.stdout.buffer.write(kitty_delete_image(1))
                 sys.stdout.buffer.write(kitty_delete_image(2))
                 sys.stdout.buffer.flush()
+        return action
 
 
 def parse_args() -> argparse.Namespace:
@@ -1099,52 +1107,88 @@ def parse_args() -> argparse.Namespace:
     return parser.parse_args()
 
 
+def explicit_start_mode(args: argparse.Namespace) -> str | None:
+    if args.tv:
+        return "tv"
+    if args.playlist:
+        return "playlist"
+    if args.youtube or (args.video and is_youtube_url(args.video)):
+        return "youtube"
+    if args.video:
+        return "direct"
+    return None
+
+
+def select_source(args: argparse.Namespace, mode: str) -> ResolvedSource:
+    youtube: str | None = None
+    if mode == "tv":
+        source = choose_from_channels(BUILT_IN_CHANNELS, "Free Internet TV")
+    elif mode == "playlist":
+        if not args.playlist:
+            raise RuntimeError("A playlist path or URL is required.")
+        source = choose_channel(args.playlist)
+    elif mode == "youtube":
+        youtube = args.youtube
+        if youtube is None and args.video and is_youtube_url(args.video):
+            youtube = args.video
+        if youtube is None:
+            youtube = choose_youtube()
+        source = youtube
+    elif mode == "local":
+        source = str(choose_video())
+    elif mode == "direct":
+        if args.video is None:
+            raise RuntimeError("A video path or URL is required.")
+        if is_url(args.video):
+            source = args.video
+        else:
+            path = Path(args.video).expanduser().resolve()
+            if not path.is_file():
+                raise FileNotFoundError(f"file not found: {path}")
+            source = str(path)
+    else:
+        raise RuntimeError(f"Unknown mode: {mode}")
+
+    return (
+        resolve_youtube(youtube)
+        if youtube is not None
+        else ResolvedSource(video=source, audio=source)
+    )
+
+
 def main() -> int:
     args = parse_args()
     try:
-        youtube: str | None = args.youtube
-        if args.tv:
-            source = choose_from_channels(BUILT_IN_CHANNELS, "Free Internet TV")
-        elif args.playlist:
-            source = choose_channel(args.playlist)
-        elif youtube:
-            source = youtube
-        elif args.video and is_youtube_url(args.video):
-            youtube = args.video
-            source = args.video
-        elif args.video and is_url(args.video):
-            source = args.video
-        elif args.video:
-            path = Path(args.video).expanduser().resolve()
-            if not path.is_file():
-                print(f"error: file not found: {path}", file=sys.stderr)
-                return 2
-            source = str(path)
-        else:
-            mode = choose_mode()
-            if mode == "tv":
-                source = choose_from_channels(BUILT_IN_CHANNELS, "Free Internet TV")
-            elif mode == "youtube":
-                youtube = choose_youtube()
-                source = youtube
-            else:
-                source = str(choose_video())
-
-        resolved = (
-            resolve_youtube(youtube)
-            if youtube is not None
-            else ResolvedSource(video=source, audio=source)
-        )
-        info = probe(resolved.video)
-        Player(
-            resolved.video,
-            info,
-            args.no_audio,
-            args.quality,
-            args.renderer,
-            audio_source=resolved.audio,
-            adaptive=not args.no_adaptive,
-        ).run()
+        mode = explicit_start_mode(args)
+        while True:
+            if mode is None:
+                mode = choose_mode()
+            resolved = select_source(args, mode)
+            info = probe(resolved.video)
+            action = Player(
+                resolved.video,
+                info,
+                args.no_audio,
+                args.quality,
+                args.renderer,
+                audio_source=resolved.audio,
+                adaptive=not args.no_adaptive,
+            ).run()
+            if action == "home":
+                mode = None
+                args.youtube = None
+                args.video = None
+                args.tv = False
+                args.playlist = None
+                continue
+            if action == "back":
+                if mode == "direct":
+                    mode = None
+                continue
+            break
+    except FileNotFoundError as error:
+        print(f"error: {error}", file=sys.stderr)
+        return 2
     except (
         RuntimeError,
         subprocess.CalledProcessError,

@@ -279,6 +279,8 @@ may change or expire stream URLs independently of `term-tv`.
 | `Left arrow` | Seek backward 5 seconds |
 | `Right arrow` | Seek forward 5 seconds |
 | `m` | Cycle through fast, balanced, and high quality |
+| `b` | Go back to the previous selection screen |
+| `h` | Go back to the main menu |
 | `q` | Quit |
 
 Seeking is disabled for live streams that do not report a duration.
