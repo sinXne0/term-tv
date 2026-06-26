@@ -15,6 +15,8 @@ blocks or native Kitty graphics.
 - Plays direct HTTP/HTTPS video and HLS (`.m3u8`) streams
 - Includes a built-in free Internet TV channel guide
 - Loads local or remote M3U playlists
+- Includes a categorized, searchable channel guide
+- Plays YouTube URLs and the first result for a YouTube search
 - Provides synchronized audio through `ffplay`
 - Supports pause, seek, terminal resize, and live quality switching
 - Offers portable true-color text rendering
@@ -30,6 +32,8 @@ blocks or native Kitty graphics.
 - Git, for the installation steps below
 
 Kitty is optional, but recommended for the sharpest image.
+YouTube support uses `yt-dlp` and Deno; the installer can add both without
+requiring root access.
 
 ## Installation walkthrough
 
@@ -82,11 +86,18 @@ cd term-tv
 ./install.sh
 ```
 
+To include YouTube support:
+
+```bash
+./install.sh --with-youtube
+```
+
 The installer:
 
 - creates `~/.local/bin` when needed;
 - installs the `term-tv` command as a symbolic link;
 - installs `tvp` as a compatibility alias;
+- optionally installs the official `yt-dlp` and Deno standalone binaries;
 - adds `~/.local/bin` to `~/.bashrc` if it is not already on `PATH`.
 
 Reload Bash after installation:
@@ -196,6 +207,40 @@ Open the built-in Internet TV guide:
 term-tv --tv
 ```
 
+The guide groups channels by category. At the selection prompt:
+
+- enter a channel number to play it;
+- enter `/text` to search names and categories;
+- enter `c` to select a category;
+- enter `a` to clear filters;
+- enter `q` to cancel.
+
+The built-in guide currently includes more than 20 free channels across kids,
+animation, US and world news, business, weather, nature, documentary, comedy,
+pets, and travel.
+
+Play a YouTube URL:
+
+```bash
+term-tv --youtube "https://www.youtube.com/watch?v=VIDEO_ID"
+```
+
+YouTube URLs also work as the positional argument:
+
+```bash
+term-tv "https://youtu.be/VIDEO_ID"
+```
+
+Play the first YouTube search result:
+
+```bash
+term-tv --youtube "NASA live"
+```
+
+You can also run `term-tv`, choose `YouTube`, then enter either a URL or search
+query. YouTube media is streamed directly; `term-tv` does not download a video
+file.
+
 Play a direct HTTP or HLS stream:
 
 ```bash
@@ -296,6 +341,27 @@ command -v ffprobe
 command -v ffplay
 ```
 
+### YouTube support is missing
+
+Install or refresh the official YouTube dependencies:
+
+```bash
+cd term-tv
+./install.sh --with-youtube
+source ~/.bashrc
+```
+
+Verify them:
+
+```bash
+yt-dlp --version
+deno --version
+```
+
+YouTube changes frequently, so rerun the installer when extraction stops
+working. Some age-restricted, private, paid, or region-blocked videos may still
+require authentication and are not supported by the built-in resolver.
+
 ## Updating
 
 From the cloned repository:
@@ -303,7 +369,7 @@ From the cloned repository:
 ```bash
 cd term-tv
 git pull --ff-only
-./install.sh
+./install.sh --with-youtube
 ```
 
 Because the installed command is a symbolic link, most source updates take

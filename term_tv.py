@@ -6,6 +6,7 @@ from __future__ import annotations
 import argparse
 import json
 import os
+import re
 import select
 import shutil
 import signal
@@ -60,6 +61,13 @@ class VideoInfo:
 class Channel:
     name: str
     source: str
+    category: str = "Other"
+
+
+@dataclass(frozen=True)
+class ResolvedSource:
+    video: str
+    audio: str
 
 
 @dataclass(frozen=True)
@@ -95,22 +103,43 @@ RENDERERS = ("auto", "text", "kitty")
 
 
 BUILT_IN_CHANNELS = [
-    Channel("CARTOONS · PBS Kids", "https://livestream.pbskids.org/out/v1/14507d931bbe48a69287e4850e53443c/est.m3u8"),
-    Channel("CARTOONS · HappyKids", "https://dil9xdvretp0f.cloudfront.net/index.m3u8"),
-    Channel("CARTOONS · Kidoodle.TV", "https://amg07653-apmc-amg07653c9-samsung-us-8740.playouts.now.amagi.tv/playlist.m3u8"),
-    Channel("CARTOONS · Kartoon Channel!", "https://d2z0ysa6dgxhlc.cloudfront.net/kchan.m3u8"),
-    Channel("ANIMATION · Animation+", "https://pb-ioe9d0fpkd6pp.akamaized.net/playlist.m3u8"),
-    Channel("CARTOONS · LEGO Channel", "https://dltiqboxjw21d.cloudfront.net/index.m3u8"),
-    Channel("NEWS · CBS News 24/7", "https://cbsn-us.cbsnstream.cbsnews.com/out/v1/55a8648e8f134e82a470f83d562deeca/master.m3u8"),
-    Channel("NEWS · NBC News NOW", "https://xumo-drct-nbcnn-ir8ze.fast.nbcuni.com/live/master.m3u8"),
-    Channel("WORLD · NHK World-Japan", "https://masterpl.hls.nhkworld.jp/hls/w/live/smarttv.m3u8"),
-    Channel("BUSINESS · Bloomberg TV", "https://bloomberg.com/media-manifest/streams/us.m3u8"),
+    Channel("PBS Kids", "https://livestream.pbskids.org/out/v1/14507d931bbe48a69287e4850e53443c/est.m3u8", "Kids"),
+    Channel("HappyKids", "https://dil9xdvretp0f.cloudfront.net/index.m3u8", "Kids"),
+    Channel("Kidoodle.TV", "https://amg07653-apmc-amg07653c9-samsung-us-8740.playouts.now.amagi.tv/playlist.m3u8", "Kids"),
+    Channel("Kartoon Channel!", "https://d2z0ysa6dgxhlc.cloudfront.net/kchan.m3u8", "Kids"),
+    Channel("Animation+", "https://pb-ioe9d0fpkd6pp.akamaized.net/playlist.m3u8", "Animation"),
+    Channel("LEGO Channel", "https://dltiqboxjw21d.cloudfront.net/index.m3u8", "Kids"),
+    Channel("CBS News 24/7", "https://cbsn-us.cbsnstream.cbsnews.com/out/v1/55a8648e8f134e82a470f83d562deeca/master.m3u8", "News"),
+    Channel("NBC News NOW", "https://xumo-drct-nbcnn-ir8ze.fast.nbcuni.com/live/master.m3u8", "News"),
+    Channel("LiveNOW from FOX", "https://pb-k5p02dtnr2162.akamaized.net/LiveNOW_from_FOX.m3u8", "News"),
+    Channel("Scripps News", "https://aegis-cloudfront-1.tubi.video/7e1c26b7-7975-4240-9a4f-480eaa8f3ea4/playlist.m3u8", "News"),
+    Channel("Al Jazeera English", "https://live-hls-apps-aje-fa.getaj.net/AJE/index.m3u8", "World News"),
+    Channel("France 24 English", "https://live.france24.com/hls/live/2037218-b/F24_EN_HI_HLS/master_5000.m3u8", "World News"),
+    Channel("NHK World-Japan", "https://masterpl.hls.nhkworld.jp/hls/w/live/smarttv.m3u8", "World News"),
+    Channel("Bloomberg TV", "https://bloomberg.com/media-manifest/streams/us.m3u8", "Business"),
+    Channel("WeatherNation", "https://stream.weathernationtv.com/WNTVStirr_eokxldieulowixkdimn/ND1/playlistSCTE35.m3u8", "Weather"),
+    Channel("PBS Nature", "https://d3mr43kyql7wgk.cloudfront.net/PBS_Nature.m3u8", "Nature"),
+    Channel("Documentary+", "https://ef79b15c8c7c46c7a9de9d33001dbd07.mediatailor.us-west-2.amazonaws.com/v1/master/ba62fe743df0fe93366eba3a257d792884136c7f/LINEAR-859-DOCUMENTARYPLUS-DOCUMENTARYPLUS/mt/documentaryplus/859/hls/master/playlist.m3u8", "Documentary"),
+    Channel("DangerTV", "https://dk0n7jh428tzj.cloudfront.net/v1/dangertv/samsungheadend_us/latest/main/hls/playlist.m3u8", "Documentary"),
+    Channel("Curiosity Now", "https://amg00170-amg00170c4-samsung-gb-4232.playouts.now.amagi.tv/playlist.m3u8", "Documentary"),
+    Channel("FailArmy", "https://failarmy-international-au.samsung.wurl.tv/playlist.m3u8", "Comedy"),
+    Channel("The Pet Collective", "https://pb-jc9emctsujawo.akamaized.net/playlist.m3u8", "Pets"),
+    Channel("Tastemade Travel", "https://d6ef3usc6d9cl.cloudfront.net/Tastemade_Travel.m3u8", "Travel"),
 ]
 
 
 def require_program(name: str) -> str:
     path = shutil.which(name)
     if path is None:
+        local_path = Path.home() / ".local" / "bin" / name
+        if local_path.is_file() and os.access(local_path, os.X_OK):
+            path = str(local_path)
+    if path is None:
+        if name == "yt-dlp":
+            raise RuntimeError(
+                "'yt-dlp' is required for YouTube playback. "
+                "Run: ./install.sh --with-youtube"
+            )
         raise RuntimeError(
             f"'{name}' is required but was not found. "
             "Install FFmpeg (Ubuntu/Debian: sudo apt install ffmpeg)."
@@ -120,6 +149,65 @@ def require_program(name: str) -> str:
 
 def is_url(value: str) -> bool:
     return urllib.parse.urlparse(value).scheme.lower() in {"http", "https"}
+
+
+def is_youtube_url(value: str) -> bool:
+    if not is_url(value):
+        return False
+    host = (urllib.parse.urlparse(value).hostname or "").lower()
+    return host == "youtu.be" or host == "youtube.com" or host.endswith(".youtube.com")
+
+
+def youtube_js_runtime() -> str:
+    """Return a supported JavaScript runtime for yt-dlp's YouTube extractor."""
+    deno = shutil.which("deno")
+    if deno is None:
+        local_deno = Path.home() / ".local" / "bin" / "deno"
+        if local_deno.is_file() and os.access(local_deno, os.X_OK):
+            deno = str(local_deno)
+    if deno:
+        result = subprocess.run(
+            [deno, "--version"], capture_output=True, text=True, check=False
+        )
+        match = re.search(r"deno\s+(\d+)\.(\d+)", result.stdout)
+        if match and (int(match.group(1)), int(match.group(2))) >= (2, 3):
+            return f"deno:{deno}"
+
+    node = shutil.which("node")
+    if node:
+        result = subprocess.run(
+            [node, "--version"], capture_output=True, text=True, check=False
+        )
+        match = re.search(r"v?(\d+)", result.stdout)
+        if match and int(match.group(1)) >= 22:
+            return f"node:{node}"
+
+    raise RuntimeError(
+        "YouTube playback requires Deno 2.3+ (or Node.js 22+). "
+        "Run: ./install.sh --with-youtube"
+    )
+
+
+def resolve_youtube(value: str) -> ResolvedSource:
+    """Resolve a YouTube URL or search query to direct video and audio URLs."""
+    yt_dlp = require_program("yt-dlp")
+    target = value if is_youtube_url(value) else f"ytsearch1:{value}"
+    command = [
+        yt_dlp,
+        "--no-warnings",
+        "--no-playlist",
+        "--js-runtimes",
+        youtube_js_runtime(),
+        "--format",
+        "bestvideo[height<=1080]+bestaudio/best[height<=1080]",
+        "--get-url",
+        target,
+    ]
+    result = subprocess.run(command, capture_output=True, text=True, check=True)
+    urls = [line.strip() for line in result.stdout.splitlines() if is_url(line.strip())]
+    if not urls:
+        raise RuntimeError("yt-dlp did not return a playable YouTube stream.")
+    return ResolvedSource(video=urls[0], audio=urls[1] if len(urls) > 1 else urls[0])
 
 
 def probe(source: str) -> VideoInfo:
@@ -411,12 +499,15 @@ def read_playlist(location: str) -> tuple[str, str | None]:
 def parse_playlist(text: str, base: str | None = None) -> list[Channel]:
     channels: list[Channel] = []
     pending_name: str | None = None
+    pending_category = "Other"
     for raw_line in text.splitlines():
         line = raw_line.strip()
         if not line:
             continue
         if line.startswith("#EXTINF:"):
             pending_name = line.rsplit(",", 1)[-1].strip() or None
+            group = re.search(r'group-title="([^"]+)"', line, flags=re.IGNORECASE)
+            pending_category = group.group(1).strip() if group else "Other"
             continue
         if line.startswith("#"):
             continue
@@ -429,50 +520,111 @@ def parse_playlist(text: str, base: str | None = None) -> list[Channel]:
             else:
                 source = str(Path(source).expanduser().resolve())
         name = pending_name or Path(urllib.parse.urlparse(source).path).name or source
-        channels.append(Channel(name=name, source=source))
+        channels.append(Channel(name=name, source=source, category=pending_category))
         pending_name = None
+        pending_category = "Other"
     return channels
+
+
+def filter_channels(
+    channels: list[Channel], query: str = "", category: str | None = None
+) -> list[Channel]:
+    query = query.casefold().strip()
+    return [
+        channel
+        for channel in channels
+        if (category is None or channel.category == category)
+        and (
+            not query
+            or query in channel.name.casefold()
+            or query in channel.category.casefold()
+        )
+    ]
+
+
+def choose_category(channels: list[Channel]) -> str | None:
+    categories = sorted({channel.category for channel in channels}, key=str.casefold)
+    print(CLEAR_SCREEN + CSI + "H", end="")
+    print("\nCategories:\n")
+    print("   0. All channels")
+    for index, category in enumerate(categories, 1):
+        count = sum(channel.category == category for channel in channels)
+        print(f"  {index:>2}. {category} ({count})")
+    while True:
+        try:
+            answer = input("\nCategory number (or q): ").strip().lower()
+        except (EOFError, KeyboardInterrupt):
+            raise RuntimeError("Selection cancelled.") from None
+        if answer == "q":
+            raise RuntimeError("Selection cancelled.")
+        if answer == "0":
+            return None
+        if answer.isdigit() and 1 <= int(answer) <= len(categories):
+            return categories[int(answer) - 1]
+        print(f"Enter 0 to {len(categories)}, or q.")
+
+
+def choose_from_channels(channels: list[Channel], title: str) -> str:
+    if not channels:
+        raise RuntimeError("The channel list contains no playable entries.")
+    if not sys.stdin.isatty():
+        raise RuntimeError("Channel selection requires an interactive terminal.")
+
+    category: str | None = None
+    query = ""
+    with MenuScreen():
+        while True:
+            print(CLEAR_SCREEN + CSI + "H", end="")
+            visible = sorted(
+                filter_channels(channels, query, category),
+                key=lambda channel: (
+                    channel.category.casefold(),
+                    channel.name.casefold(),
+                ),
+            )
+            active_filters = []
+            if category:
+                active_filters.append(f"category: {category}")
+            if query:
+                active_filters.append(f"search: {query}")
+            suffix = f" · {' · '.join(active_filters)}" if active_filters else ""
+            print(f"\n{title} ({len(visible)}/{len(channels)}){suffix}\n")
+            if visible:
+                previous_category = None
+                for index, channel in enumerate(visible, 1):
+                    if channel.category != previous_category:
+                        print(f"  ── {channel.category} ──")
+                        previous_category = channel.category
+                    print(f"  {index:>3}. {channel.name}")
+            else:
+                print("  No matching channels.")
+            print("\n  /text search · c category · a clear filters · q cancel")
+
+            try:
+                answer = input("\nChoose: ").strip()
+            except (EOFError, KeyboardInterrupt):
+                raise RuntimeError("Selection cancelled.") from None
+            command = answer.lower()
+            if command == "q":
+                raise RuntimeError("Selection cancelled.")
+            if command == "c":
+                category = choose_category(channels)
+                continue
+            if command == "a":
+                category = None
+                query = ""
+                continue
+            if answer.startswith("/"):
+                query = answer[1:].strip()
+                continue
+            if answer.isdigit() and 1 <= int(answer) <= len(visible):
+                return visible[int(answer) - 1].source
+            print("Enter a channel number, /search, c, a, or q.")
 
 
 def choose_channel(playlist: str) -> str:
     text, base = read_playlist(playlist)
-    channels = parse_playlist(text, base)
-    if not channels:
-        raise RuntimeError("The playlist contains no playable entries.")
-    if not sys.stdin.isatty():
-        raise RuntimeError("Channel selection requires an interactive terminal.")
-
-    print(f"Choose a channel ({len(channels)} available):\n")
-    for index, channel in enumerate(channels, 1):
-        print(f"  {index:>3}. {channel.name}")
-    print("\n  q. Cancel")
-    while True:
-        try:
-            answer = input("\nChannel number: ").strip()
-        except (EOFError, KeyboardInterrupt):
-            raise RuntimeError("Selection cancelled.") from None
-        if answer.lower() == "q":
-            raise RuntimeError("Selection cancelled.")
-        if answer.isdigit() and 1 <= int(answer) <= len(channels):
-            return channels[int(answer) - 1].source
-        print(f"Enter a number from 1 to {len(channels)}, or q.")
-
-
-def choose_from_channels(channels: list[Channel], title: str) -> str:
-    print(f"{title} ({len(channels)} channels):\n")
-    for index, channel in enumerate(channels, 1):
-        print(f"  {index:>2}. {channel.name}")
-    print("\n  q. Cancel")
-    while True:
-        try:
-            answer = input("\nChannel number: ").strip()
-        except (EOFError, KeyboardInterrupt):
-            raise RuntimeError("Selection cancelled.") from None
-        if answer.lower() == "q":
-            raise RuntimeError("Selection cancelled.")
-        if answer.isdigit() and 1 <= int(answer) <= len(channels):
-            return channels[int(answer) - 1].source
-        print(f"Enter a number from 1 to {len(channels)}, or q.")
+    return choose_from_channels(parse_playlist(text, base), "Playlist")
 
 
 def choose_mode() -> str:
@@ -481,6 +633,7 @@ def choose_mode() -> str:
     print("term-tv\n")
     print("  1. Internet TV")
     print("  2. Local video")
+    print("  3. YouTube")
     print("  q. Quit")
     while True:
         try:
@@ -491,9 +644,32 @@ def choose_mode() -> str:
             return "tv"
         if answer == "2":
             return "local"
+        if answer == "3":
+            return "youtube"
         if answer == "q":
             raise RuntimeError("Selection cancelled.")
-        print("Enter 1, 2, or q.")
+        print("Enter 1, 2, 3, or q.")
+
+
+def choose_youtube() -> str:
+    try:
+        value = input("\nYouTube URL or search: ").strip()
+    except (EOFError, KeyboardInterrupt):
+        raise RuntimeError("Selection cancelled.") from None
+    if not value:
+        raise RuntimeError("A YouTube URL or search query is required.")
+    return value
+
+
+class MenuScreen:
+    def __enter__(self) -> "MenuScreen":
+        sys.stdout.write(ALT_SCREEN + CLEAR_SCREEN + CSI + "H")
+        sys.stdout.flush()
+        return self
+
+    def __exit__(self, *_: object) -> None:
+        sys.stdout.write(RESET + MAIN_SCREEN)
+        sys.stdout.flush()
 
 
 class Terminal:
@@ -537,8 +713,10 @@ class Player:
         no_audio: bool,
         quality: str,
         renderer: str,
+        audio_source: str | None = None,
     ) -> None:
         self.source = source
+        self.audio_source = audio_source or source
         self.info = info
         self.no_audio = no_audio
         self.quality = quality
@@ -659,7 +837,7 @@ class Player:
                 "-autoexit",
                 "-ss",
                 str(self.position),
-                self.source,
+                self.audio_source,
             ]
             self.audio = subprocess.Popen(
                 audio_command,
@@ -854,6 +1032,12 @@ def parse_args() -> argparse.Namespace:
         action="store_true",
         help="open the built-in free Internet TV guide",
     )
+    parser.add_argument(
+        "-y",
+        "--youtube",
+        metavar="URL_OR_SEARCH",
+        help="play a YouTube URL or the first result for a search query",
+    )
     parser.add_argument("--no-audio", action="store_true", help="disable audio playback")
     parser.add_argument(
         "-q",
@@ -874,10 +1058,16 @@ def parse_args() -> argparse.Namespace:
 def main() -> int:
     args = parse_args()
     try:
+        youtube: str | None = args.youtube
         if args.tv:
             source = choose_from_channels(BUILT_IN_CHANNELS, "Free Internet TV")
         elif args.playlist:
             source = choose_channel(args.playlist)
+        elif youtube:
+            source = youtube
+        elif args.video and is_youtube_url(args.video):
+            youtube = args.video
+            source = args.video
         elif args.video and is_url(args.video):
             source = args.video
         elif args.video:
@@ -888,13 +1078,28 @@ def main() -> int:
             source = str(path)
         else:
             mode = choose_mode()
-            source = (
-                choose_from_channels(BUILT_IN_CHANNELS, "Free Internet TV")
-                if mode == "tv"
-                else str(choose_video())
-            )
-        info = probe(source)
-        Player(source, info, args.no_audio, args.quality, args.renderer).run()
+            if mode == "tv":
+                source = choose_from_channels(BUILT_IN_CHANNELS, "Free Internet TV")
+            elif mode == "youtube":
+                youtube = choose_youtube()
+                source = youtube
+            else:
+                source = str(choose_video())
+
+        resolved = (
+            resolve_youtube(youtube)
+            if youtube is not None
+            else ResolvedSource(video=source, audio=source)
+        )
+        info = probe(resolved.video)
+        Player(
+            resolved.video,
+            info,
+            args.no_audio,
+            args.quality,
+            args.renderer,
+            audio_source=resolved.audio,
+        ).run()
     except (
         RuntimeError,
         subprocess.CalledProcessError,

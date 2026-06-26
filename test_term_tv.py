@@ -34,7 +34,7 @@ class RenderTests(unittest.TestCase):
 
     def test_parse_extended_m3u(self):
         playlist = """#EXTM3U
-#EXTINF:-1,News Channel
+#EXTINF:-1 group-title="News",News Channel
 https://example.com/live/news.m3u8
 #EXTINF:-1,Local Station
 station.mp4
@@ -42,20 +42,79 @@ station.mp4
         channels = tvp.parse_playlist(playlist, "https://example.com/list.m3u")
         self.assertEqual(channels[0].name, "News Channel")
         self.assertEqual(channels[0].source, "https://example.com/live/news.m3u8")
+        self.assertEqual(channels[0].category, "News")
         self.assertEqual(channels[1].source, "https://example.com/station.mp4")
+        self.assertEqual(channels[1].category, "Other")
 
     def test_url_detection_rejects_other_schemes(self):
         self.assertTrue(tvp.is_url("https://example.com/live.m3u8"))
         self.assertFalse(tvp.is_url("file:///tmp/video.mp4"))
+
+    def test_youtube_url_detection(self):
+        self.assertTrue(tvp.is_youtube_url("https://www.youtube.com/watch?v=abc"))
+        self.assertTrue(tvp.is_youtube_url("https://youtu.be/abc"))
+        self.assertFalse(tvp.is_youtube_url("https://example.com/video.mp4"))
+
+    @mock.patch.object(tvp.subprocess, "run")
+    @mock.patch.object(tvp.shutil, "which")
+    def test_youtube_runtime_accepts_supported_deno(self, which, run):
+        which.side_effect = lambda name: "/usr/bin/deno" if name == "deno" else None
+        run.return_value = mock.Mock(stdout="deno 2.9.0\n")
+        self.assertEqual(tvp.youtube_js_runtime(), "deno:/usr/bin/deno")
+
+    @mock.patch.object(tvp.Path, "home")
+    @mock.patch.object(tvp.shutil, "which", return_value=None)
+    def test_require_program_checks_user_local_bin(self, _which, home):
+        home.return_value = Path("/tmp/home")
+        with mock.patch.object(tvp.Path, "is_file", return_value=True), mock.patch.object(
+            tvp.os, "access", return_value=True
+        ):
+            self.assertEqual(
+                tvp.require_program("yt-dlp"), "/tmp/home/.local/bin/yt-dlp"
+            )
 
     def test_parse_plain_m3u(self):
         channels = tvp.parse_playlist("https://example.com/live.m3u8")
         self.assertEqual(channels[0].name, "live.m3u8")
 
     def test_built_in_guide_has_cartoon_and_news_channels(self):
-        names = [channel.name for channel in tvp.BUILT_IN_CHANNELS]
-        self.assertTrue(any("CARTOONS" in name for name in names))
-        self.assertTrue(any("NEWS" in name for name in names))
+        categories = {channel.category for channel in tvp.BUILT_IN_CHANNELS}
+        self.assertIn("Kids", categories)
+        self.assertIn("News", categories)
+        self.assertIn("Documentary", categories)
+        self.assertGreaterEqual(len(tvp.BUILT_IN_CHANNELS), 20)
+
+    def test_channel_filter_matches_name_and_category(self):
+        channels = [
+            tvp.Channel("World Report", "https://example.com/1", "News"),
+            tvp.Channel("Nature Live", "https://example.com/2", "Nature"),
+        ]
+        self.assertEqual(
+            tvp.filter_channels(channels, query="world"), [channels[0]]
+        )
+        self.assertEqual(
+            tvp.filter_channels(channels, query="news"), [channels[0]]
+        )
+        self.assertEqual(
+            tvp.filter_channels(channels, category="Nature"), [channels[1]]
+        )
+
+    @mock.patch.object(tvp.subprocess, "run")
+    @mock.patch.object(tvp, "youtube_js_runtime", return_value="deno:/usr/bin/deno")
+    @mock.patch.object(tvp, "require_program", return_value="/usr/bin/yt-dlp")
+    def test_youtube_resolver_returns_separate_video_and_audio(
+        self, _require_program, _runtime, run
+    ):
+        run.return_value = mock.Mock(
+            stdout="https://video.example/stream\nhttps://audio.example/stream\n"
+        )
+        resolved = tvp.resolve_youtube("terminal video player")
+        self.assertEqual(resolved.video, "https://video.example/stream")
+        self.assertEqual(resolved.audio, "https://audio.example/stream")
+        command = run.call_args.args[0]
+        self.assertIn("ytsearch1:terminal video player", command)
+        self.assertIn("--no-playlist", command)
+        self.assertIn("deno:/usr/bin/deno", command)
 
     def test_quality_presets_trade_resolution_for_speed(self):
         self.assertLess(
