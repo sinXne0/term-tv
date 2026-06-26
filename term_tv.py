@@ -918,12 +918,11 @@ class Player:
         expected = (time.monotonic() - self.started_at) * self.frame_rate
         return max(0.0, (expected - self.frame_index - 1) / self.frame_rate)
 
-    def resync_if_far_behind(self) -> bool:
-        """Restart decoding when the renderer is too far behind real time."""
+    def resync_clock_if_far_behind(self) -> bool:
+        """Keep playback responsive without tearing down the video pipeline."""
         if self.lag_seconds() < 1.0:
             return False
-        position = self.current_position() if self.info.duration > 0 else 0
-        self.start(position)
+        self.started_at = time.monotonic() - ((self.frame_index + 1) / self.frame_rate)
         return True
 
     def adapt_after_frame(self, elapsed: float) -> bool:
@@ -985,8 +984,7 @@ class Player:
                         time.sleep(0.02)
                         continue
 
-                    if self.resync_if_far_behind():
-                        continue
+                    self.resync_clock_if_far_behind()
 
                     new_dimensions = self.dimensions()
                     if new_dimensions != (self.width, self.height):

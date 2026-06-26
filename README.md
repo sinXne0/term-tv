@@ -202,8 +202,9 @@ term-tv --quality high ~/Videos/movie.mp4
 ```
 
 By default, `term-tv` adapts if the terminal cannot keep up. It drops stale
-frames, resyncs when playback gets too far behind, and may step down one
-quality preset after sustained slow rendering. To force the selected preset:
+frames, keeps the playback clock from drifting too far behind, and may step
+down one quality preset after sustained slow rendering. To force the selected
+preset:
 
 ```bash
 term-tv --quality high --no-adaptive ~/Videos/movie.mp4

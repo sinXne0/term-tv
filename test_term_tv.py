@@ -275,6 +275,26 @@ station.mp4
         self.assertEqual(player.quality, "balanced")
         start.assert_called_once()
 
+    def test_lag_resync_adjusts_clock_without_restarting_decoder(self):
+        player = tvp.Player(
+            "video.mp4",
+            tvp.VideoInfo(width=1920, height=1080, fps=30, duration=60),
+            no_audio=True,
+            quality="balanced",
+            renderer="text",
+        )
+        player.frame_rate = 15
+        player.frame_index = 0
+        player.started_at = 0
+
+        with mock.patch.object(tvp.time, "monotonic", return_value=2.0):
+            with mock.patch.object(player, "start") as start:
+                changed = player.resync_clock_if_far_behind()
+
+        self.assertTrue(changed)
+        start.assert_not_called()
+        self.assertAlmostEqual(player.started_at, 2.0 - (1 / 15))
+
     def test_no_adaptive_keeps_requested_quality(self):
         player = tvp.Player(
             "video.mp4",
