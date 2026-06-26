@@ -28,7 +28,13 @@ UNDERLINE = CSI + "4m"
 
 
 USER_AGENT = "term-web/0.1 (+https://github.com/sinXne0/term-tv)"
-SEARCH_URL = "https://duckduckgo.com/html/?q={query}"
+SEARCH_ENGINES = {
+    "mojeek": "https://www.mojeek.com/search?q={query}",
+    "ddg": "https://html.duckduckgo.com/html/?q={query}",
+    "duckduckgo": "https://html.duckduckgo.com/html/?q={query}",
+    "brave": "https://search.brave.com/search?q={query}&source=web",
+}
+DEFAULT_SEARCH_ENGINE = "mojeek"
 
 
 @dataclass(frozen=True)
@@ -154,7 +160,13 @@ def normalize_address(value: str) -> str:
         return value
     if looks_like_host(value):
         return f"https://{value}"
-    return SEARCH_URL.format(query=urllib.parse.quote_plus(value))
+    engine = DEFAULT_SEARCH_ENGINE
+    query = value
+    shortcut = re.match(r"^!(\w+)\s+(.+)$", value)
+    if shortcut and shortcut.group(1).casefold() in SEARCH_ENGINES:
+        engine = shortcut.group(1).casefold()
+        query = shortcut.group(2)
+    return SEARCH_ENGINES[engine].format(query=urllib.parse.quote_plus(query))
 
 
 def absolutize(base: str, href: str) -> str:
@@ -398,6 +410,8 @@ def about_home() -> Page:
             "A terminal-only text browser.",
             "",
             "Enter a URL, search words, or a link number.",
+            "Default search uses Mojeek because DuckDuckGo often challenges terminal traffic.",
+            "Use shortcuts like !ddg cats or !brave cats to choose another engine.",
             "",
             "Controls:",
             "  number  follow link",
@@ -415,7 +429,7 @@ def about_home() -> Page:
         links=[
             Link(1, "Python", "https://www.python.org/"),
             Link(2, "Wikipedia", "https://www.wikipedia.org/"),
-            Link(3, "DuckDuckGo", "https://duckduckgo.com/html/"),
+            Link(3, "Mojeek", "https://www.mojeek.com/"),
         ],
     )
 

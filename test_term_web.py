@@ -23,7 +23,17 @@ class BrowserTests(unittest.TestCase):
     def test_normalize_address_turns_words_into_search(self):
         self.assertEqual(
             web.normalize_address("terminal browser"),
-            "https://duckduckgo.com/html/?q=terminal+browser",
+            "https://www.mojeek.com/search?q=terminal+browser",
+        )
+
+    def test_normalize_address_supports_search_shortcuts(self):
+        self.assertEqual(
+            web.normalize_address("!ddg terminal browser"),
+            "https://html.duckduckgo.com/html/?q=terminal+browser",
+        )
+        self.assertEqual(
+            web.normalize_address("!brave terminal browser"),
+            "https://search.brave.com/search?q=terminal+browser&source=web",
         )
 
     def test_absolutize_rejects_non_web_actions(self):

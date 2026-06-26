@@ -171,11 +171,21 @@ Search from the terminal:
 term-web "open source terminal browser"
 ```
 
+Search uses Mojeek by default because DuckDuckGo often shows bot challenges to
+terminal clients. You can choose another engine with a shortcut:
+
+```bash
+term-web "!ddg open source terminal browser"
+term-web "!brave open source terminal browser"
+```
+
 While browsing:
 
 | Input | Action |
 | --- | --- |
-| URL or words | Open a URL or search DuckDuckGo HTML |
+| URL or words | Open a URL or search Mojeek |
+| `!ddg words` | Search DuckDuckGo HTML |
+| `!brave words` | Search Brave |
 | Link number | Follow that numbered link |
 | `j` / `k` | Scroll down or up one line |
 | `d` / `u` | Page down or page up |
